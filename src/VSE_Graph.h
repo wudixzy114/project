@@ -50,7 +50,30 @@ namespace VSE
 
         class NodeDefinition *Definition = nullptr;
 
+        Variant InternalState;
+
         int InDegree;
+
+        Pin *FindPinByName(const std::string &name, PinDirection direction)
+        {
+            if (direction == PinDirection::Input)
+            {
+                for (auto &pin : InputPins)
+                {
+                    if (pin.Name == name)
+                        return &pin;
+                }
+            }
+            else
+            {
+                for (auto &pin : OutputPins)
+                {
+                    if (pin.Name == name)
+                        return &pin;
+                }
+            }
+            return nullptr;
+        }
     };
 
     struct Link

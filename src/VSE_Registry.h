@@ -11,6 +11,8 @@ namespace VSE
         GraphExecutor *Executor;
         Node *CurrentNode;
         std::map<int, Variant> &ValueCache;
+        std::map<int, EvalutationState> &NodeStates;
+        std::stack<Node *> &ExecutionStack;
 
         Variant GetInputValue(const std::string &pinName)
         {
@@ -20,9 +22,15 @@ namespace VSE
                 {
                     if (pin.ConnectedTo)
                     {
+                        Node *upstreamNode = pin.ConnectedTo->ParentNode;
+                        Executor->ResolveDataForNode(upstreamNode, ValueCache, NodeStates);
                         if (ValueCache.count(pin.ConnectedTo->ID))
                         {
                             return ValueCache.at(pin.ConnectedTo->ID);
+                        }
+                        else
+                        {
+                            throw std::logic_error("Value not found in cache after resolving node: " + upstreamNode->Title);
                         }
                     }
                     return pin.DefaultValue;

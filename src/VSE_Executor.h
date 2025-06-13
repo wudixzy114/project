@@ -11,6 +11,13 @@
 
 namespace VSE
 {
+    enum class EvalutationState
+    {
+        NotEvaluated,
+        Evaluating,
+        Evaluated
+    };
+
     class GraphExecutor
     {
     public:
@@ -25,37 +32,36 @@ namespace VSE
 
         void TriggerEvent(Node *triggerNode)
         {
-            Node *startNode = triggerNode;
-            std::queue<Node *> executionQueue;
-            executionQueue.push(startNode);
             std::map<int, Variant> valueCache;
-            while (!executionQueue.empty())
+            std::map<int, EvalutationState> nodeStates;
+            std::stack<Node *> executionStack;
+
+            if (triggerNode)
             {
-                Node *currentNode = executionQueue.front();
-                executionQueue.pop();
+                executionStack.push(triggerNode);
+            }
+
+            while (!executionStack.empty())
+            {
+                Node *currentNode = executionStack.top();
+                executionStack.pop();
+
                 if (!currentNode)
                 {
                     continue;
                 }
 
-                if (!ResolveDataDependencies(currentNode, valueCache))
-                {
-                    std::cerr << "Error: Cyclic dependency detected or failed to resolve data for node " << currentNode->Title << std::endl;
-                    throw std::runtime_error("Error: Cyclic dependency detected or failed to resolve data for node");
-                }
-
                 ExecutionContext context{
-                    this,
-                    currentNode,
-                    valueCache};
+                    this, currentNode, valueCache, nodeStates, executionStack};
 
                 int outputExecPinIndex = currentNode->Definition->Execute(context);
+
                 if (outputExecPinIndex >= 0)
                 {
-                    Pin *newExecPin = FindExecutionOutput(currentNode, outputExecPinIndex);
-                    if (newExecPin && newExecPin->ConnectedTo)
+                    Pin *nextExecPin = FindExecutionOutput(currentNode, outputExecPinIndex);
+                    if (nextExecPin && nextExecPin->ConnectedTo)
                     {
-                        executionQueue.push(newExecPin->ConnectedTo->ParentNode);
+                        executionStack.push(nextExecPin->ConnectedTo->ParentNode);
                     }
                 }
             }
@@ -82,95 +88,37 @@ namespace VSE
             }
         }
 
-        bool ResolveDataDependencies(Node *targetNode, std::map<int, Variant> &valueCache)
+        void ResolveDataForNode(Node *node, std::map<int, Variant> &valueCache, std::map<int, EvalutationState> &nodeStates)
         {
-            std::queue<Node *> dataQueue;    // 用于拓扑排序的队列
-            std::vector<Node *> sortedNodes; // 拓扑排序的结果
-            std::map<int, int> inDegreeMap;  // <NodeID, InDegree>
-            std::vector<Node *> relevantNodes;
-
-            std::function<void(Node *)> buildSubgraph = [&](Node *n)
+            auto it = nodeStates.find(node->ID);
+            if (it == nodeStates.end())
             {
-                relevantNodes.push_back(n);
-                inDegreeMap[n->ID] = 0;
-                for (const auto &pin : n->InputPins)
-                {
-                    if (pin.Type == PinType::Data && pin.ConnectedTo)
-                    {
-                        Node *upstreamNode = pin.ConnectedTo->ParentNode;
-                        // 如果上游节点还没被访问过
-                        if (std::find(relevantNodes.begin(), relevantNodes.end(), upstreamNode) == relevantNodes.end())
-                        {
-                            buildSubgraph(upstreamNode);
-                        }
-                    }
-                }
-            };
-
-            buildSubgraph(targetNode);
-
-            for (Node *n : relevantNodes)
+                it->second = EvalutationState::NotEvaluated;
+            }
+            EvalutationState state = it->second;
+            if (state == EvalutationState::Evaluated)
             {
-                for (const auto &pin : n->InputPins)
+                return;
+            }
+            if (state == EvalutationState::Evaluating)
+            {
+                throw std::runtime_error("Cyclic data dependency detected at node: " + node->Title);
+            }
+            nodeStates[node->ID] = EvalutationState::Evaluating;
+            for (const auto &pin : node->InputPins)
+            {
+                if (pin.Type == PinType::Data && pin.ConnectedTo)
                 {
-                    if (pin.Type == PinType::Data && pin.ConnectedTo)
-                    {
-                        if (std::find(relevantNodes.begin(), relevantNodes.end(), pin.ConnectedTo->ParentNode) != relevantNodes.end())
-                        {
-                            inDegreeMap[n->ID]++;
-                        }
-                    }
+                    Node *upstreamNode = pin.ConnectedTo->ParentNode;
+                    ResolveDataForNode(upstreamNode, valueCache, nodeStates);
                 }
             }
+            std::stack<Node *> dummyStack;
+            ExecutionContext context{
+                this, node, valueCache, nodeStates, dummyStack};
 
-            for (Node *n : relevantNodes)
-            {
-                if (inDegreeMap[n->ID] == 0)
-                {
-                    dataQueue.push(n);
-                }
-            }
-
-            while (!dataQueue.empty())
-            {
-                Node *u = dataQueue.front();
-                dataQueue.pop();
-                sortedNodes.push_back(u);
-
-                for (const auto &outPin : u->OutputPins)
-                {
-                    if (outPin.Type == PinType::Data && outPin.ConnectedTo)
-                    {
-                        Node *v = outPin.ConnectedTo->ParentNode;
-                        if (inDegreeMap.count(v->ID))
-                        {
-                            inDegreeMap[v->ID]--;
-                            if (inDegreeMap[v->ID] == 0)
-                            {
-                                dataQueue.push(v);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (sortedNodes.size() != relevantNodes.size())
-            {
-                return false;
-            }
-
-            for (Node *nodeToEvaluate : sortedNodes)
-            {
-                if (nodeToEvaluate == targetNode)
-                {
-                    continue;
-                }
-                ExecutionContext context{
-                    this, nodeToEvaluate, valueCache};
-                nodeToEvaluate->Definition->Execute(context);
-            }
-
-            return true;
+            node->Definition->Execute(context);
+            nodeStates[node->ID] = EvalutationState::Evaluated;
         }
 
         Pin *FindExecutionOutput(Node *node, int index)
