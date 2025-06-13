@@ -4,6 +4,10 @@
 
 namespace VSE
 {
+    struct ExecToken
+    {
+    };
+
     class GraphExecutor;
 
     struct ExecutionContext
